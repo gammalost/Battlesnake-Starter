@@ -135,10 +135,31 @@ export function move(gameState: GameState): MoveResponse {
       }
     }
 
-    // 3. Aggression — bonus for moving into a square where a smaller snake
-    //    will also want to move (we win head-to-head)
+    // 3. Head hunting — actively chase smaller snakes for a head-to-head kill
+    for (const opponent of board.snakes) {
+      if (opponent.id === you.id) continue;
+      if (opponent.length >= myLength) continue; // only hunt smaller snakes
+      const distToHead = bfsDistance(next, opponent.head, blocked, width, height);
+      if (distToHead !== Infinity) {
+        // Closer to their head = higher score; scale down for distant targets
+        score += Math.max(0, (20 - distToHead)) * 6;
+      }
+    }
+
+    // 4. Low-health hunting — close in on desperate opponents who are predictable
+    for (const opponent of board.snakes) {
+      if (opponent.id === you.id) continue;
+      if (opponent.health >= 25) continue; // only hunt near-starving opponents
+      const distToHead = bfsDistance(next, opponent.head, blocked, width, height);
+      if (distToHead !== Infinity) {
+        // Extra urgency bonus: the lower their health, the more we want to intercept
+        score += (25 - opponent.health) * 5 + Math.max(0, (15 - distToHead)) * 4;
+      }
+    }
+
+    // 5. Kill square bonus — reward landing where a smaller snake's head could go
     if (killSquares.has(nextKey)) {
-      score += 30;
+      score += 50;
     }
 
     if (score > bestScore) {
