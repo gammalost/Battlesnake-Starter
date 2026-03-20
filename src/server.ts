@@ -113,15 +113,25 @@ export function move(gameState: GameState): MoveResponse {
     const space = floodFill(next, blocked, width, height);
     score += space * 10;
 
-    // 2. Food — if we need food, prefer moves closer to food
-    if (needsFood && board.food.length > 0) {
-      let minDist = Infinity;
-      for (const food of board.food) {
-        const dist = bfsDistance(next, food, blocked, width, height);
-        if (dist < minDist) minDist = dist;
+    // 2. Food — our need + denial value per food item
+    for (const food of board.food) {
+      const ourDist = bfsDistance(next, food, blocked, width, height);
+      if (ourDist === Infinity) continue;
+
+      // Our own need: low health or outmatched in size
+      if (needsFood) {
+        score += (100 - ourDist) * 5;
       }
-      if (minDist !== Infinity) {
-        score += (100 - minDist) * 5;
+
+      // Denial: intercept food that a low-health opponent needs to survive
+      for (const opponent of board.snakes) {
+        if (opponent.id === you.id) continue;
+        if (opponent.health >= 40) continue; // only deny opponents at risk of starving
+        const theirDist = bfsDistance(opponent.head, food, blocked, width, height);
+        if (ourDist <= theirDist) {
+          // We reach it first (or tie) — score by how desperate they are
+          score += (40 - opponent.health) * 4;
+        }
       }
     }
 
