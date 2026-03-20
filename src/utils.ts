@@ -44,29 +44,42 @@ export function moveCoord(head: Coord, dir: string): Coord {
   }
 }
 
+/**
+ * Decay-aware flood fill.
+ *
+ * decayMap maps a coord key to the earliest BFS step at which that square
+ * becomes passable:
+ *   - Not in map (or value 0): always passable
+ *   - Value N: passable once BFS depth >= N (body segment vacates after N turns)
+ *   - Value Infinity: permanently blocked (hazards)
+ *
+ * This lets the snake "see through" its own tail since those squares open up
+ * as the body moves forward, preventing false dead-ends near walls/corners.
+ */
 export function floodFill(
   start: Coord,
-  blocked: Set<string>,
+  decayMap: Map<string, number>,
   width: number,
   height: number
 ): number {
-  const queue: Coord[] = [start];
+  const queue: [Coord, number][] = [[start, 0]];
   const visited = new Set<string>([coordKey(start)]);
   const dirs = ["up", "down", "left", "right"];
 
   while (queue.length > 0) {
-    const curr = queue.shift()!;
+    const [curr, step] = queue.shift()!;
     for (const dir of dirs) {
       const next = moveCoord(curr, dir);
       const key = coordKey(next);
+      const freeAt = decayMap.get(key) ?? 0;
       if (
         next.x >= 0 && next.x < width &&
         next.y >= 0 && next.y < height &&
-        !blocked.has(key) &&
-        !visited.has(key)
+        !visited.has(key) &&
+        step + 1 >= freeAt
       ) {
         visited.add(key);
-        queue.push(next);
+        queue.push([next, step + 1]);
       }
     }
   }

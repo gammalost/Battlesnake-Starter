@@ -29,25 +29,49 @@ export function move(gameState: GameState): MoveResponse {
   const myHead = you.head;
   const myLength = you.length;
 
-  // --- Build blocked cells (all snake bodies, excluding tails that will move) ---
+  // --- Build blocked set (for BFS pathfinding: food, hunting) ---
+  // Excludes tails that will move away this turn.
   const blocked = new Set<string>();
   for (const snake of board.snakes) {
     const lastIdx = snake.body.length - 1;
-    // Tail stays if the last two segments share coordinates (snake just ate)
     const tailStays =
       lastIdx >= 1 &&
       snake.body[lastIdx].x === snake.body[lastIdx - 1].x &&
       snake.body[lastIdx].y === snake.body[lastIdx - 1].y;
 
     for (let i = 0; i < snake.body.length; i++) {
-      if (!tailStays && i === lastIdx) continue; // tail moves away
+      if (!tailStays && i === lastIdx) continue;
       blocked.add(coordKey(snake.body[i]));
     }
   }
-
-  // Block hazards too
   for (const hz of board.hazards) {
     blocked.add(coordKey(hz));
+  }
+
+  // --- Build decayMap (for flood fill) ---
+  // Maps coord key -> earliest BFS step at which that square is passable.
+  // body[i] in a snake of length n vacates after (n - i) turns, so the square
+  // is accessible once BFS depth >= (n - i). Hazards are permanently blocked.
+  const decayMap = new Map<string, number>();
+  for (const snake of board.snakes) {
+    const n = snake.body.length;
+    const lastIdx = n - 1;
+    const tailStays =
+      lastIdx >= 1 &&
+      snake.body[lastIdx].x === snake.body[lastIdx - 1].x &&
+      snake.body[lastIdx].y === snake.body[lastIdx - 1].y;
+
+    for (let i = 0; i < n; i++) {
+      if (!tailStays && i === lastIdx) continue; // tail moves; leave square passable
+      const freeAt = n - i + (tailStays ? 1 : 0);
+      const key = coordKey(snake.body[i]);
+      const existing = decayMap.get(key) ?? 0;
+      // Multiple snakes overlapping: take the most conservative (longest block)
+      if (existing !== Infinity) decayMap.set(key, Math.max(existing, freeAt));
+    }
+  }
+  for (const hz of board.hazards) {
+    decayMap.set(coordKey(hz), Infinity);
   }
 
   // --- Classify opponent head next squares ---
@@ -110,8 +134,14 @@ export function move(gameState: GameState): MoveResponse {
     let score = 0;
 
     // 1. Flood fill — maximize reachable space (primary driver)
-    const space = floodFill(next, blocked, width, height);
+    // Uses decay-aware BFS so tail squares are not counted as permanent walls.
+    const space = floodFill(next, decayMap, width, height);
     score += space * 10;
+
+    // Penalty: if available space is less than our length we risk getting trapped
+    if (space < myLength) {
+      score -= (myLength - space) * 25;
+    }
 
     // 2. Food — our need + denial value per food item
     for (const food of board.food) {
@@ -168,6 +198,6 @@ export function move(gameState: GameState): MoveResponse {
     }
   }
 
-  console.log(`MOVE ${gameState.turn}: ${bestMove} (space=${floodFill(moveCoord(myHead, bestMove), blocked, width, height)}, health=${you.health})`);
+  console.log(`MOVE ${gameState.turn}: ${bestMove} (space=${floodFill(moveCoord(myHead, bestMove), decayMap, width, height)}, health=${you.health})`);
   return { move: bestMove, shout: "Take down Magnus!" };
 }
