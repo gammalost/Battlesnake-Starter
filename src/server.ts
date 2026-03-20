@@ -9,7 +9,7 @@ export function info(): InfoResponse {
   return {
     apiversion: "1",
     author: "Bubblun",
-    color: "#af8a76",
+    color: "#d6cba4",
     head: "scarf",
     tail: "fat-rattle",
   };
