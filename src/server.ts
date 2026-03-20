@@ -9,7 +9,7 @@ export function info(): InfoResponse {
   return {
     apiversion: "1",
     author: "Bubblun",
-    color: "#d6cba4",
+    color: "#d2dadb",
     head: "scarf",
     tail: "fat-rattle",
   };
@@ -133,10 +133,9 @@ export function move(gameState: GameState): MoveResponse {
     const nextKey = coordKey(next);
     let score = 0;
 
-    // 1. Flood fill — maximize reachable space (primary driver)
-    // Uses decay-aware BFS so tail squares are not counted as permanent walls.
+    // 1. Flood fill — space awareness (reduced weight to let aggression compete)
     const space = floodFill(next, decayMap, width, height);
-    score += space * 10;
+    score += space * 7;
 
     // Penalty: if available space is less than our length we risk getting trapped
     if (space < myLength) {
@@ -156,40 +155,47 @@ export function move(gameState: GameState): MoveResponse {
       // Denial: intercept food that a low-health opponent needs to survive
       for (const opponent of board.snakes) {
         if (opponent.id === you.id) continue;
-        if (opponent.health >= 40) continue; // only deny opponents at risk of starving
+        if (opponent.health >= 40) continue;
         const theirDist = bfsDistance(opponent.head, food, blocked, width, height);
         if (ourDist <= theirDist) {
-          // We reach it first (or tie) — score by how desperate they are
           score += (40 - opponent.health) * 4;
         }
       }
     }
 
-    // 3. Head hunting — actively chase smaller snakes for a head-to-head kill
+    // 3. Head hunting — aggressively chase smaller snakes for a guaranteed kill
     for (const opponent of board.snakes) {
       if (opponent.id === you.id) continue;
-      if (opponent.length >= myLength) continue; // only hunt smaller snakes
+      if (opponent.length >= myLength) continue;
       const distToHead = bfsDistance(next, opponent.head, blocked, width, height);
       if (distToHead !== Infinity) {
-        // Closer to their head = higher score; scale down for distant targets
-        score += Math.max(0, (20 - distToHead)) * 6;
+        score += Math.max(0, (40 - distToHead)) * 12;
       }
     }
 
-    // 4. Low-health hunting — close in on desperate opponents who are predictable
+    // 4. Same-size hunting — risky coin-flip, but we take it
     for (const opponent of board.snakes) {
       if (opponent.id === you.id) continue;
-      if (opponent.health >= 25) continue; // only hunt near-starving opponents
+      if (opponent.length !== myLength) continue;
       const distToHead = bfsDistance(next, opponent.head, blocked, width, height);
       if (distToHead !== Infinity) {
-        // Extra urgency bonus: the lower their health, the more we want to intercept
-        score += (25 - opponent.health) * 5 + Math.max(0, (15 - distToHead)) * 4;
+        score += Math.max(0, (20 - distToHead)) * 5;
       }
     }
 
-    // 5. Kill square bonus — reward landing where a smaller snake's head could go
+    // 5. Low-health hunting — pursue any hungry opponent, not just starving ones
+    for (const opponent of board.snakes) {
+      if (opponent.id === you.id) continue;
+      if (opponent.health >= 50) continue;
+      const distToHead = bfsDistance(next, opponent.head, blocked, width, height);
+      if (distToHead !== Infinity) {
+        score += (50 - opponent.health) * 6 + Math.max(0, (20 - distToHead)) * 5;
+      }
+    }
+
+    // 6. Kill square bonus — reward landing where a smaller snake's head could go
     if (killSquares.has(nextKey)) {
-      score += 50;
+      score += 100;
     }
 
     if (score > bestScore) {
