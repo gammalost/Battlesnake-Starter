@@ -1,5 +1,8 @@
 import { Coord, GameState, InfoResponse, MoveResponse } from "./types";
-import { getOpposite, getRelativePosition, manhattenDistance } from "./utils";
+import { coordKey, moveCoord, floodFill, bfsDistance } from "./utils";
+
+const DIRECTIONS = ["up", "down", "left", "right"] as const;
+type Direction = (typeof DIRECTIONS)[number];
 
 export function info(): InfoResponse {
   console.log("INFO");
@@ -21,132 +24,119 @@ export function end(gameState: GameState): void {
 }
 
 export function move(gameState: GameState): MoveResponse {
-  const mode: "food" | "attack" | "defend" = "food";
+  const { board, you } = gameState;
+  const { width, height } = board;
+  const myHead = you.head;
+  const myLength = you.length;
 
-  let isMoveSafe: { [key: string]: boolean } = {
-    up: true,
-    down: true,
-    left: true,
-    right: true,
-  };
+  // --- Build blocked cells (all snake bodies, excluding tails that will move) ---
+  const blocked = new Set<string>();
+  for (const snake of board.snakes) {
+    const lastIdx = snake.body.length - 1;
+    // Tail stays if the last two segments share coordinates (snake just ate)
+    const tailStays =
+      lastIdx >= 1 &&
+      snake.body[lastIdx].x === snake.body[lastIdx - 1].x &&
+      snake.body[lastIdx].y === snake.body[lastIdx - 1].y;
 
-  // Step 0: Don't move backwards
-  const myHead = gameState.you.head;
-  const myNeck = gameState.you.body[1];
-
-  if (myNeck.x < myHead.x) {
-    isMoveSafe.left = false;
-  } else if (myNeck.x > myHead.x) {
-    isMoveSafe.right = false;
-  } else if (myNeck.y < myHead.y) {
-    isMoveSafe.down = false;
-  } else if (myNeck.y > myHead.y) {
-    isMoveSafe.up = false;
-  }
-
-  // Step 1: Prevent moving out of bounds
-  const boardWidth = gameState.board.width;
-  const boardHeight = gameState.board.height;
-
-  if (myHead.x === 0) {
-    isMoveSafe.left = false;
-  }
-  if (myHead.x === boardWidth - 1) {
-    isMoveSafe.right = false;
-  }
-  if (myHead.y === 0) {
-    isMoveSafe.down = false;
-  }
-  if (myHead.y === boardHeight - 1) {
-    isMoveSafe.up = false;
-  }
-
-  // Step 2: Prevent colliding with yourself
-  const myBody = gameState.you.body;
-  myBody.forEach((segment) => {
-    if (myHead.x === segment.x - 1 && myHead.y === segment.y) {
-      isMoveSafe.right = false; // My body is to the right
-    }
-    if (myHead.x === segment.x + 1 && myHead.y === segment.y) {
-      isMoveSafe.left = false; // My body is to the left
-    }
-    if (myHead.y === segment.y - 1 && myHead.x === segment.x) {
-      isMoveSafe.up = false; // My body is above
-    }
-    if (myHead.y === segment.y + 1 && myHead.x === segment.x) {
-      isMoveSafe.down = false; // My body is below
-    }
-  });
-
-  const safeMoves = Object.keys(isMoveSafe).filter((key) => isMoveSafe[key]);
-
-  if (safeMoves.length == 0) {
-    console.log(`MOVE ${gameState.turn}: No safe moves detected! Moving down`);
-    return { move: "down", shout: "Take down Magnus!" };
-  }
-
-  // Step 4: Move towards the closest food
-  const food = gameState.board.food;
-  let closestFood: Coord | undefined;
-  let minDistance = Infinity;
-
-  food.forEach((f) => {
-    const distance = Math.abs(myHead.x - f.x) + Math.abs(myHead.y - f.y);
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestFood = f;
-    }
-  });
-
-  let nextMove = safeMoves[Math.floor(Math.random() * safeMoves.length)];
-  const currentHealth = gameState.you.health;
-  const mappedOpponents = gameState.board.snakes
-    .filter((snakes) => snakes.id !== gameState.you.id)
-    .map((sn) => {
-      return {
-        health: sn.health,
-        head: sn.head,
-        id: sn.id,
-        relativeToMe: getRelativePosition(gameState.you.head, sn),
-        distance: manhattenDistance(myHead, sn.head),
-      };
-    });
-  // const mostLives = mappedOpponents.toSorted((a, b) => b.health - a.health)[0];
-  // const closest = mappedOpponents.toSorted(
-  //   (a, b) => b.distance - a.distance
-  // )[0];
-  // if (closest.distance < 2) {
-  //   const defend = getOpposite(closest.relativeToMe);
-  //   if (defend && safeMoves.includes(defend)) {
-  //     return { move: defend, shout: "DEFEND" };
-  //   }
-  // }
-
-  if (closestFood !== undefined) {
-    const preferredMoves: string[] = [];
-    if (myHead.x < closestFood.x) {
-      preferredMoves.push("right");
-    } else if (myHead.x > closestFood.x) {
-      preferredMoves.push("left");
-    }
-    if (myHead.y < closestFood.y) {
-      preferredMoves.push("up");
-    } else if (myHead.y > closestFood.y) {
-      preferredMoves.push("down");
-    }
-
-    // Choose a preferred move if it's safe
-    const safePreferredMoves = preferredMoves.filter((move) =>
-      safeMoves.includes(move)
-    );
-    if (safePreferredMoves.length > 0) {
-      nextMove =
-        safePreferredMoves[
-          Math.floor(Math.random() * safePreferredMoves.length)
-        ];
+    for (let i = 0; i < snake.body.length; i++) {
+      if (!tailStays && i === lastIdx) continue; // tail moves away
+      blocked.add(coordKey(snake.body[i]));
     }
   }
 
-  console.log(`MOVE ${gameState.turn}: ${nextMove}`);
-  return { move: nextMove, shout: "Take down Magnus!" };
+  // Block hazards too
+  for (const hz of board.hazards) {
+    blocked.add(coordKey(hz));
+  }
+
+  // --- Classify opponent head next squares ---
+  // dangerSquares: squares a same-size-or-larger snake head can reach next turn
+  // killSquares:   squares a smaller snake head can reach next turn
+  const dangerSquares = new Set<string>();
+  const killSquares = new Set<string>();
+
+  for (const snake of board.snakes) {
+    if (snake.id === you.id) continue;
+    for (const dir of DIRECTIONS) {
+      const next = moveCoord(snake.head, dir);
+      if (next.x < 0 || next.x >= width || next.y < 0 || next.y >= height) continue;
+      if (snake.length >= myLength) {
+        dangerSquares.add(coordKey(next));
+      } else {
+        killSquares.add(coordKey(next));
+      }
+    }
+  }
+
+  // --- Filter to safe moves ---
+  const safeMoves: Direction[] = [];
+  for (const dir of DIRECTIONS) {
+    const next = moveCoord(myHead, dir);
+    if (next.x < 0 || next.x >= width || next.y < 0 || next.y >= height) continue;
+    if (blocked.has(coordKey(next))) continue;
+    if (dangerSquares.has(coordKey(next))) continue;
+    safeMoves.push(dir);
+  }
+
+  // Desperate fallback: ignore head-to-head danger, just avoid walls and bodies
+  if (safeMoves.length === 0) {
+    for (const dir of DIRECTIONS) {
+      const next = moveCoord(myHead, dir);
+      if (next.x < 0 || next.x >= width || next.y < 0 || next.y >= height) continue;
+      if (blocked.has(coordKey(next))) continue;
+      safeMoves.push(dir);
+    }
+  }
+
+  if (safeMoves.length === 0) {
+    console.log(`MOVE ${gameState.turn}: down (no safe moves)`);
+    return { move: "down", shout: "I'm trapped!" };
+  }
+
+  // --- Decide if we need food ---
+  // Eat when: health is low OR we are shorter than or equal to any opponent
+  const needsFood =
+    you.health < 40 ||
+    board.snakes.some((s) => s.id !== you.id && s.length >= myLength);
+
+  // --- Score each safe move ---
+  let bestMove = safeMoves[0];
+  let bestScore = -Infinity;
+
+  for (const dir of safeMoves) {
+    const next = moveCoord(myHead, dir);
+    const nextKey = coordKey(next);
+    let score = 0;
+
+    // 1. Flood fill — maximize reachable space (primary driver)
+    const space = floodFill(next, blocked, width, height);
+    score += space * 10;
+
+    // 2. Food — if we need food, prefer moves closer to food
+    if (needsFood && board.food.length > 0) {
+      let minDist = Infinity;
+      for (const food of board.food) {
+        const dist = bfsDistance(next, food, blocked, width, height);
+        if (dist < minDist) minDist = dist;
+      }
+      if (minDist !== Infinity) {
+        score += (100 - minDist) * 5;
+      }
+    }
+
+    // 3. Aggression — bonus for moving into a square where a smaller snake
+    //    will also want to move (we win head-to-head)
+    if (killSquares.has(nextKey)) {
+      score += 30;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = dir;
+    }
+  }
+
+  console.log(`MOVE ${gameState.turn}: ${bestMove} (space=${floodFill(moveCoord(myHead, bestMove), blocked, width, height)}, health=${you.health})`);
+  return { move: bestMove, shout: "Take down Magnus!" };
 }
