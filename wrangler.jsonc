@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "battlesnake-ts-server",
+  "name": "battlesnake",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-10"
   // "compatibility_flags": [
